@@ -1,103 +1,181 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import { v4 as uuidv4 } from 'uuid';
+import { Chat, Message } from '@/types/chat';
+import { getChats, getChat, saveChat } from '@/utils/storage';
+import ChatMessage from '@/components/ChatMessage';
+import ChatSidebar from '@/components/ChatSidebar';
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [currentChat, setCurrentChat] = useState<Chat | null>(null);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [streamingMessage, setStreamingMessage] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  useEffect(() => {
+    const loadedChats = getChats();
+    setChats(loadedChats);
+    if (loadedChats.length > 0) {
+      setCurrentChat(loadedChats[0]);
+    } else {
+      createNewChat();
+    }
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [currentChat?.messages, streamingMessage]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const createNewChat = () => {
+    const newChat: Chat = {
+      id: uuidv4(),
+      title: 'New Chat',
+      messages: [],
+      createdAt: new Date(),
+    };
+    setCurrentChat(newChat);
+    setChats((prev) => [newChat, ...prev]);
+    saveChat(newChat);
+  };
+
+  const handleChatSelect = (chatId: string) => {
+    const selectedChat = getChat(chatId);
+    if (selectedChat) {
+      setCurrentChat(selectedChat);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || !currentChat) return;
+
+    const userMessage: Message = {
+      role: 'user',
+      content: input.trim(),
+    };
+
+    const updatedMessages = [...currentChat.messages, userMessage];
+    const updatedChat = {
+      ...currentChat,
+      messages: updatedMessages,
+      title: currentChat.messages.length === 0 ? input.trim().slice(0, 30) : currentChat.title,
+    };
+
+    setCurrentChat(updatedChat);
+    setChats((prev) =>
+      prev.map((chat) => (chat.id === updatedChat.id ? updatedChat : chat))
+    );
+    saveChat(updatedChat);
+    setInput('');
+    setIsLoading(true);
+    setStreamingMessage('');
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: updatedMessages,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No reader available');
+      }
+
+      let fullMessage = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = new TextDecoder().decode(value);
+        fullMessage += text;
+        setStreamingMessage(fullMessage);
+      }
+
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: fullMessage,
+      };
+
+      const finalMessages = [...updatedMessages, assistantMessage];
+      const finalChat = {
+        ...updatedChat,
+        messages: finalMessages,
+      };
+
+      setCurrentChat(finalChat);
+      setChats((prev) =>
+        prev.map((chat) => (chat.id === finalChat.id ? finalChat : chat))
+      );
+      saveChat(finalChat);
+      
+      // Wait for the state updates to complete before clearing the streaming message
+      await new Promise(resolve => setTimeout(resolve, 100));
+      setStreamingMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <main className="flex h-screen">
+      <ChatSidebar
+        chats={chats}
+        currentChatId={currentChat?.id || null}
+        onChatSelect={handleChatSelect}
+        onNewChat={createNewChat}
+      />
+      <div className="flex-1 flex flex-col">
+        <div className="flex-1 overflow-y-auto p-4">
+          {currentChat?.messages.map((message, index) => (
+            <ChatMessage key={index} message={message} />
+          ))}
+          {streamingMessage && (
+            <div className="flex justify-start mb-4">
+              <div className="max-w-[70%] rounded-lg px-4 py-2 bg-gray-200 text-gray-800">
+                <p className="whitespace-pre-wrap">{streamingMessage}</p>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+        <form onSubmit={handleSubmit} className="p-4 border-t">
+          <div className="flex gap-4">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Type your message..."
+              className="flex-1 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={isLoading}
+            />
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50"
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      </div>
+    </main>
   );
 }
