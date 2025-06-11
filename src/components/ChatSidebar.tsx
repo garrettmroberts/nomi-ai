@@ -1,12 +1,13 @@
 import { Chat } from '@/types/chat';
 import { TrashIcon } from '@heroicons/react/24/outline';
-import { deleteChat } from '@/utils/storage';
+import { deleteChat, getChats } from '@/utils/storage';
 
 interface ChatSidebarProps {
   chats: Chat[];
   currentChatId: string | null;
   onChatSelect: (chatId: string) => void;
   onNewChat: () => void;
+  onChatsUpdate: (chats: Chat[]) => void;
 }
 
 export default function ChatSidebar({
@@ -14,10 +15,14 @@ export default function ChatSidebar({
   currentChatId,
   onChatSelect,
   onNewChat,
+  onChatsUpdate,
 }: ChatSidebarProps) {
   const handleDeleteChat = (e: React.MouseEvent, chatId: string) => {
     e.stopPropagation();
     deleteChat(chatId);
+    const updatedChats = getChats();
+    onChatsUpdate(updatedChats);
+    
     if (currentChatId === chatId) {
       onNewChat();
     }
